@@ -1,11 +1,12 @@
 # C3 BLE Debugger
 
-ESP32-C3 BLE 调试固件与电脑端终端工具。用于扫描设备、检查 GATT 服务、读取报告描述符、订阅原始通知，并按测试动作记录报文。支持 macOS、Windows 和 Linux 的 Python 终端环境。
+浏览器 Web 调试台与 ESP32-C3 BLE 调试固件。浏览器通过 Web Serial 直接连接 C3，用于配对设备、逐项采样按键/开关/滚轮、查看去重键值并导出 CSV。另保留 Python 终端工具，用于扫描、GATT 服务检查、读写和原始通知记录。
 
 ## 目录
 
 - `firmware/` — ESP32-C3 BLE 调试固件，独立于日常遥控器接收固件。
-- `desktop/ble_debugger.py` — 电脑端终端程序。
+- `desktop/web/` — 浏览器直连串口的 Web 调试台，无需后台服务。
+- `desktop/ble_debugger.py` — 可选 Python 终端程序。
 - `tests/` — 串口分帧和命令响应回归测试。
 - `VERSION` — 四位编译号。
 
