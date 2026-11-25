@@ -2,13 +2,13 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {SerialLink,TestRun}=require('../desktop/web/serial.js');
 test('only capture between start/stop; retain previous attempts',()=>{
- const r=new TestRun();r.setup(4);r.notify({hex:'outside'});r.start(0,'上');r.notify({hex:'4200'});r.notify({hex:'0000'});r.stop();r.notify({hex:'outside'});r.confirm(0);
- assert.equal(r.data.keys[0].status,'passed');assert.equal(r.data.keys[0].attempts[0].notifications.length,2);
- r.start(0,'上');r.notify({hex:'4200'});r.stop('invalid','disconnect');assert.throws(()=>r.confirm(0));assert.equal(r.data.keys[0].attempts.length,2);
- assert.equal(r.data.keys[0].attempts[0].status,'passed');
+ const r=new TestRun();r.setup(4);r.notify({hex:'outside'});r.start(0,'上');r.notify({hex:'4200'});r.notify({hex:'0000'});r.stop();r.notify({hex:'outside'});
+ assert.equal(r.data.keys[0].status,'captured');assert.equal(r.data.keys[0].attempts[0].notifications.length,2);
+ r.start(0,'上');r.notify({hex:'4200'});r.stop('invalid','disconnect');assert.equal(r.data.keys[0].status,'invalid');assert.equal(r.data.keys[0].attempts.length,2);
+ assert.equal(r.data.keys[0].attempts[0].status,'captured');
 });
-test('empty sampling cannot pass; limits and concurrent capture',()=>{
- const r=new TestRun();assert.throws(()=>r.setup(0));assert.throws(()=>r.setup(101));r.setup(2);r.start(0,'1');assert.throws(()=>r.start(1,'2'));assert.throws(()=>r.setup(3));r.stop();assert.throws(()=>r.confirm(0));r.skip(0);assert.equal(r.data.keys[0].status,'skipped');
+test('empty sampling is recorded; limits and clear preserve names',()=>{
+ const r=new TestRun();assert.throws(()=>r.setup(0));assert.throws(()=>r.setup(101));r.setup(2);r.start(0,'1');assert.throws(()=>r.start(1,'2'));assert.throws(()=>r.setup(3));assert.throws(()=>r.clear(0));r.stop();assert.equal(r.data.keys[0].status,'empty');r.clear(0);assert.equal(r.data.keys[0].status,'pending');assert.equal(r.data.keys[0].name,'1');assert.equal(r.data.keys[0].attempts.length,0);
 });
 test('fragments, events and malformed lines preserve response association',async()=>{
  const events=[];const link=new SerialLink(e=>events.push(e),()=>{});link.writer={write:async()=>{}};
@@ -25,4 +25,9 @@ test('device rejection and concurrent commands are surfaced',async()=>{
 });
 test('oversize malformed line recovers on next newline',()=>{
  let count=0;const link=new SerialLink(()=>count++,()=>{});link.ingest('x'.repeat(131074));link.ingest('\n{"event":"ready"}\n');assert.equal(count,1);
+});
+
+test('old manual verdicts migrate to observed sampling results',()=>{
+ const r=new TestRun({schema:1,keys:[{name:'up',status:'passed',attempts:[{status:'passed',notifications:[{hex:'4200'}]}]},{name:'down',status:'review',attempts:[{status:'review',notifications:[]}]},{name:'left',status:'skipped',attempts:[]}],trace:[]});
+ assert.deepEqual(r.data.keys.map(k=>k.status),['captured','empty','pending']);assert.equal(r.data.schema,2);assert.equal(r.data.keys[0].attempts[0].notifications[0].hex,'4200');
 });

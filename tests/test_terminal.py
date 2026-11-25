@@ -52,7 +52,7 @@ class TerminalTests(unittest.TestCase):
                 records = [json.loads(line) for line in log.read_text().splitlines()]
                 self.assertEqual(records[1]['message']['event'], 'marker')
                 self.assertTrue(all(record['label'] == 'select' for record in records[1:]))
-                self.assertIn('C3 BLE Debugger 0004', result.stdout)
+                self.assertIn('C3 BLE Debugger 0005', result.stdout)
         finally:
             stop.set()
             worker.join(timeout=1)

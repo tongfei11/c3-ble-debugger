@@ -72,7 +72,17 @@ class SerialLink {
   }
 }
 class TestRun {
-  constructor(data) { this.data = data || {schema:1,created:new Date().toISOString(),keys:[],trace:[]}; this.active = null; }
+  constructor(data) {
+    this.data = data || {schema:2,created:new Date().toISOString(),keys:[],trace:[]}; this.active = null;
+    // Normalize prior manual verdicts into observations without losing samples.
+    for (const key of this.data.keys) {
+      for (const attempt of key.attempts) {
+        if (['passed','review'].includes(attempt.status)) attempt.status = attempt.notifications.length ? 'captured' : 'empty';
+      }
+      if (['passed','review','skipped'].includes(key.status)) key.status = key.attempts.at(-1)?.status || 'pending';
+    }
+    this.data.schema = 2;
+  }
   setup(count) {
     if (!Number.isInteger(count) || count < 1 || count > 100) throw Error('按键数量须为 1–100');
     if (this.active !== null) throw Error('请先停止当前采样');
@@ -90,16 +100,16 @@ class TestRun {
     if (attempt.notifications.length >= 10000) { this.stop('invalid','单次采样达到 10000 条上限，请缩短采样'); return; }
     attempt.notifications.push({time:new Date().toISOString(),...event});
   }
-  stop(status = 'review', reason = '') {
+  stop(status = 'auto', reason = '') {
     if (this.active === null) return;
     const key = this.data.keys[this.active], attempt = key.attempts.at(-1);
+    if (status === 'auto') status = attempt.notifications.length ? 'captured' : 'empty';
     attempt.ended = new Date().toISOString(); attempt.status = status; attempt.reason = reason; key.status = status; this.active = null;
   }
-  confirm(index) {
-    const key = this.data.keys[index], attempt = key?.attempts.at(-1);
-    if (key?.status !== 'review' || !attempt?.notifications.length) throw Error('需要停止采样且收到报文后才能确认');
-    attempt.status = key.status = 'passed';
+  clear(index) {
+    if (this.active !== null) throw Error('请先停止采样');
+    const key = this.data.keys[index]; if (!key) throw Error('请选择按键');
+    key.attempts = []; key.status = 'pending';
   }
-  skip(index) { if (this.active !== null) throw Error('请先停止采样'); this.data.keys[index].status = 'skipped'; }
 }
 if (typeof module !== 'undefined') module.exports = {SerialLink,TestRun};

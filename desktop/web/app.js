@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id), storeKey = 'c3-ble-debugger-run-v1';
-const labels = {pending:'待测试',recording:'采样中',review:'待确认',passed:'通过',skipped:'已跳过',invalid:'异常'};
+const labels = {pending:'待测试',recording:'采样中',captured:'收到报文',empty:'未收到报文',invalid:'异常'};
 let run, link = null, identity = null, peer = {}, busy = false, selected = 0, channels = [], subscriptions = [], channelResults = [], traceLimit = 20000;
 try { run = new TestRun(JSON.parse(localStorage.getItem(storeKey)) || undefined); }
 catch (_) { run = new TestRun(); }
@@ -48,10 +48,9 @@ function controls() {
   $('count').disabled = busy || active;
   $('keyName').disabled = busy || active || !key;
   $('start').disabled = busy || active || !key || !connected || !subscriptions.length;
-  $('start').textContent = key?.attempts.length ? '重新测试' : '开始测试';
+  $('start').textContent = key?.attempts.length ? '重新采样' : '开始采样';
   $('stop').disabled = !active;
-  $('confirm').disabled = busy || active || key?.status !== 'review' || !key?.attempts.at(-1)?.notifications.length;
-  $('skip').disabled = busy || active || !key;
+  $('clearKey').disabled = busy || active || !key?.attempts.length;
   $('newRun').disabled = busy || active;
   document.querySelectorAll('[data-device]').forEach(b=>b.disabled=busy||active||!serial||connected);
   document.querySelectorAll('#channels input').forEach(b=>b.disabled=busy||active);
@@ -65,8 +64,8 @@ function renderKeys() {
     const status = document.createElement('small'); status.textContent = labels[key.status]; button.append(name,status);
     button.onclick=()=>{ selected=index; render(); }; list.append(button);
   });
-  const passed = run.data.keys.filter(k=>k.status==='passed').length;
-  $('progress').textContent = `${passed} / ${run.data.keys.length} 通过`;
+  const completed = run.data.keys.filter(k=>['captured','empty','invalid'].includes(k.status)).length;
+  $('progress').textContent = `${completed} / ${run.data.keys.length} 已采样`;
   controls();
 }
 function renderCapture() {
@@ -74,7 +73,7 @@ function renderCapture() {
   $('sampleCount').textContent = `${rows.length} 条报文${run.active !== null?' · 正在记录':''}`;
   $('samples').textContent = rows.length ? rows.slice(-100).map(n=>`${String(n.handle).padEnd(5)} ${n.hex.padEnd(44)} ${n.ms ?? ''} ms`).join('\n') : '暂无报文。点击开始测试后操作实体按键。';
   $('samples').scrollTop = $('samples').scrollHeight;
-  $('instruction').textContent = run.active !== null ? `正在采集「${key.name}」：请按下再松开，完成后点击停止采样。` : a?.reason || (key ? `当前：${key.name} · ${labels[key.status]}。停止后检查报文，再确认通过。` : '先生成按键测试清单。');
+  $('instruction').textContent = run.active !== null ? `正在采集「${key.name}」：请按下再松开，完成后点击停止并保存。` : a?.reason || (key ? `当前：${key.name} · ${labels[key.status]}。停止后自动保存并切换下一键，可随时返回重采。` : '先生成按键测试清单。');
   if (document.activeElement !== $('keyName')) $('keyName').value = key?.name || '';
   controls();
 }
@@ -203,13 +202,21 @@ $('start').onclick=()=>action('开始按键测试',async()=>{
   if(previous)throw Error('当前清单已有其他设备的采样，请先导出并新建测试');
   run.start(selected,$('keyName').value);const a=run.data.keys[selected].attempts.at(-1);a.device=device;a.channels=[...subscriptions];a.firmware=identity;
 });
-$('stop').onclick=()=>{run.stop();save();render();notice('采样已停止，请检查报文并确认结果。');};
-$('confirm').onclick=()=>{try{run.confirm(selected);if(selected<run.data.keys.length-1)selected++;save();render();notice('已确认。下一键需重新点击开始测试。');}catch(e){notice(e.message,true);}};
-$('skip').onclick=()=>{run.skip(selected);if(selected<run.data.keys.length-1)selected++;save();render();};
+$('stop').onclick=()=>{
+  const index=run.active;if(index===null)return;
+  run.stop();const key=run.data.keys[index];
+  if(index<run.data.keys.length-1)selected=index+1;
+  save();render();notice(`「${key.name}」已保存：${labels[key.status]}。${index<run.data.keys.length-1?'下一键点击开始采样即可。':'本轮采样结束，可查看或导出结果。'}`);
+};
+$('clearKey').onclick=()=>{
+  const key=run.data.keys[selected];if(!key?.attempts.length)return;
+  if(!window.confirm(`清空「${key.name}」的全部采样数据？按键名称会保留。`))return;
+  run.clear(selected);save();render();notice('本键采样数据已清空，名称保留。');
+};
 function download(content,extension,type) {
   const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`c3-test-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0004',exported:new Date().toISOString()},null,2),'json','application/json');
+$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0005',exported:new Date().toISOString()},null,2),'json','application/json');
 $('exportCsv').onclick=()=>{
   const rows=[['序号','按键','状态','尝试次数','最后报文数','HEX','备注'],...run.data.keys.map((k,i)=>{const a=k.attempts.at(-1);return[i+1,k.name,labels[k.status],k.attempts.length,a?.notifications.length||0,[...new Set((a?.notifications||[]).map(n=>n.hex))].join(' '),a?.reason||''];})];
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"').join(',')).join('\r\n');download('\ufeff'+csv,'csv','text/csv;charset=utf-8');
