@@ -73,15 +73,16 @@ function renderCapture() {
   $('sampleCount').textContent = `${rows.length} 条报文${run.active !== null?' · 正在记录':''}`;
   $('samples').textContent = rows.length ? rows.slice(-100).map(n=>`${String(n.handle).padEnd(5)} ${n.hex.padEnd(44)} ${n.ms ?? ''} ms`).join('\n') : '暂无报文。点击开始测试后操作实体按键。';
   $('samples').scrollTop = $('samples').scrollHeight;
-  $('instruction').textContent = run.active !== null ? `正在采集「${key.name}」：请按下再松开，完成后点击停止并保存。` : a?.reason || (key ? `当前：${key.name} · ${labels[key.status]}。停止后自动保存并切换下一键，可随时返回重采。` : '先生成按键测试清单。');
+  $('instruction').textContent = run.active !== null ? `正在采集「${key.name}」：请操作按键、依次切换各档位或转动滚轮，完成后点击停止并保存。` : a?.reason || (key ? `当前：${key.name} · ${labels[key.status]}。停止后自动保存并切换下一键，可随时返回重采。` : '先生成按键测试清单。');
   if (document.activeElement !== $('keyName')) $('keyName').value = key?.name || '';
   controls();
 }
+function keyValues(key) { return [...new Set((key.attempts.at(-1)?.notifications || []).map(n=>n.hex))].join(' · '); }
 function renderResults() {
   const body = $('resultRows'); body.replaceChildren();
-  run.data.keys.forEach((key,i)=>{
-    const a = key.attempts.at(-1), row = document.createElement('tr');
-    const values = [i+1,key.name,labels[key.status],`${key.attempts.length} / ${a?.notifications.length||0}`,[...new Set((a?.notifications||[]).map(n=>n.hex))].join(' · ') || '—'];
+  run.data.keys.forEach(key=>{
+    const row = document.createElement('tr');
+    const values = [key.name,keyValues(key) || '—'];
     values.forEach(v=>{const cell=document.createElement('td');cell.textContent=v;row.append(cell);});body.append(row);
   });
 }
@@ -216,9 +217,9 @@ $('clearKey').onclick=()=>{
 function download(content,extension,type) {
   const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`c3-test-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0005',exported:new Date().toISOString()},null,2),'json','application/json');
+$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0006',exported:new Date().toISOString()},null,2),'json','application/json');
 $('exportCsv').onclick=()=>{
-  const rows=[['序号','按键','状态','尝试次数','最后报文数','HEX','备注'],...run.data.keys.map((k,i)=>{const a=k.attempts.at(-1);return[i+1,k.name,labels[k.status],k.attempts.length,a?.notifications.length||0,[...new Set((a?.notifications||[]).map(n=>n.hex))].join(' '),a?.reason||''];})];
+  const rows=[['按键','键值'],...run.data.keys.map(k=>[k.name,keyValues(k)])];
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"').join(',')).join('\r\n');download('\ufeff'+csv,'csv','text/csv;charset=utf-8');
 };
 $('newRun').onclick=()=>{if(!window.confirm('清空当前本地测试记录？请先导出需要保留的结果。'))return;run=new TestRun();selected=0;save();render();notice('已新建测试，请生成按键清单。');};
