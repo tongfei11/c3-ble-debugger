@@ -154,7 +154,7 @@ def list_ports():
 
 
 class DebugShell(cmd.Cmd):
-    intro = 'C3 BLE Debugger 0006. Type help. Use mark <label> before pressing a hardware button.'
+    intro = 'C3 BLE Debugger 0007. Type help. Use mark <label> before pressing a hardware button.'
     prompt = 'ble> '
 
     def __init__(self, session, capture):

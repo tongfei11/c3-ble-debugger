@@ -7,7 +7,7 @@ catch (_) { run = new TestRun(); }
 for (const key of run.data.keys) if (key.status === 'recording') {
   key.status = 'invalid'; const a = key.attempts.at(-1); a.status = 'invalid'; a.reason = '页面关闭或刷新中断采样'; a.ended = new Date().toISOString();
 }
-function notice(text,error=false) { $('notice').textContent = text; $('notice').classList.toggle('error',error); }
+function notice(text,error=false) { $('notice').textContent = text; $('notice').classList.toggle('error',error); $('deviceStatus').textContent=text; $('deviceStatus').classList.toggle('error',error); }
 function save() {
   try { localStorage.setItem(storeKey,JSON.stringify(run.data)); $('saveState').textContent = '已保存到当前浏览器'; }
   catch (_) { $('saveState').textContent = '本地保存失败，请及时导出 JSON'; }
@@ -47,12 +47,15 @@ function controls() {
   $('setup').disabled = busy || active;
   $('count').disabled = busy || active;
   $('keyName').disabled = busy || active || !key;
-  $('start').disabled = busy || active || !key || !connected || !subscriptions.length;
+  $('start').disabled = busy || active || !key || !serial || !connected;
   $('start').textContent = key?.attempts.length ? '重新采样' : '开始采样';
   $('stop').disabled = !active;
   $('clearKey').disabled = busy || active || !key?.attempts.length;
   $('newRun').disabled = busy || active;
-  document.querySelectorAll('[data-device]').forEach(b=>b.disabled=busy||active||!serial||connected);
+  document.querySelectorAll('[data-device]').forEach(b=>{
+    b.disabled=busy||active||!serial;
+    b.textContent=connected&&peer.address===b.dataset.device?(subscriptions.length?'重新准备采样':'准备采样'):(b.dataset.connectLabel||'连接设备');
+  });
   document.querySelectorAll('#channels input').forEach(b=>b.disabled=busy||active);
   document.querySelectorAll('#keyList button').forEach(b=>b.disabled=busy||active);
 }
@@ -111,8 +114,10 @@ function deviceList(devices, bonded) {
     const options=document.createElement('div');options.className='toolbar';
     let type;
     if (!d.address_type) {type=document.createElement('select');type.setAttribute('aria-label','设备地址类型');for(const t of ['public','random']){const o=document.createElement('option');o.value=t;o.textContent=t;type.append(o);}options.append(type);}
-    const button=document.createElement('button');button.dataset.device=d.address;button.textContent=bonded?'连接设备':'连接并配对';
+    const button=document.createElement('button');button.dataset.device=d.address;button.dataset.connectLabel=bonded?'连接设备':'连接并配对';button.textContent=button.dataset.connectLabel;
     button.onclick=()=>action('连接设备',async()=>{
+      if(peer.connected && peer.address===d.address){await prepare();return;}
+      if(peer.connected){await link.request('disconnect');peer={};}
       channels=[];subscriptions=[];channelResults=[];renderChannels();
       peer=await link.request('connect',{address:d.address,address_type:d.address_type||type.value,secure:true});
       needsFreshLink=false;
@@ -157,12 +162,23 @@ async function applyChannels() {
   if (failures) throw Error(`${subscriptions.length} 路订阅成功，${failures} 路失败。请展开列表检查；可使用已成功的通道测试。`);
 }
 async function prepare() {
-  if(needsFreshLink) throw Error('C3 保留着旧的蓝牙连接，请先点击断开蓝牙，再连接设备，以重建本次测试的通知状态');
+  if(needsFreshLink) {
+    const address=peer.address, addressType=peer.address_type||run.data.device?.address_type||'public';
+    notice('正在恢复设备连接…');
+    await link.request('disconnect');peer={};subscriptions=[];channels=[];channelResults=[];renderChannels();renderConnection();
+    peer=await link.request('connect',{address,address_type:addressType,secure:true});
+    needsFreshLink=false;
+  }
+  if(!peer.connected)throw Error('设备连接已断开，请唤醒设备后点击连接');
+  notice('正在自动枚举服务…');
   const db=await link.request('discover');run.data.services=db.services;
   const all=(db.services||[]).flatMap(s=>(s.characteristics||[]).filter(c=>c.notify||c.indicate).map(c=>({...c,service:s.uuid,mode:c.notify?'notify':'indicate'})));
   const hid=all.filter(c=>c.service==='1812'&&c.notify), preferred=hid.length?hid:all.filter(c=>c.notify);
   channels=all.map(c=>({...c,selected:preferred.slice(0,4).some(p=>p.handle===c.handle)}));renderChannels();
+  notice('正在自动订阅通知通道…');
   await applyChannels();await status();
+  run.data.device={...(run.data.device?.address===peer.address?run.data.device:{}),address:peer.address,address_type:peer.address_type,name:deviceName(peer)};
+  notice(`设备已就绪，已订阅 ${subscriptions.length} 路通知，可以开始采样。`);
 }
 async function openSerial(port, preserve = false) {
   lastPort = port;
@@ -175,7 +191,8 @@ async function openSerial(port, preserve = false) {
     if(!sameLink){subscriptions=[];channels=[];channelResults=[];renderChannels();}
     deviceList((await link.request('bonds')).bonds||[],true);
   } catch(e) {await link?.close();link=null;identity=null;peer={};subscriptions=[];throw e;}
-  $('identity').textContent=`已验证 ${identity.name} · 固件 ${identity.build} · 协议 ${identity.protocol} · 115200 baud。${needsFreshLink?'检测到旧蓝牙连接：请先断开蓝牙再连接设备。':''}`;
+  $('identity').textContent=`已验证 ${identity.name} · 固件 ${identity.build} · 协议 ${identity.protocol} · 115200 baud。`;
+  if(peer.connected && (needsFreshLink || !subscriptions.length))await prepare();
 }
 $('serialConnect').onclick = async()=>{
   if (!navigator.serial || busy || link) return;
@@ -197,7 +214,10 @@ $('setup').onclick=()=>{
 };
 $('keyName').oninput=()=>{if(run.data.keys[selected]){run.data.keys[selected].name=$('keyName').value.slice(0,80);save();renderKeys();renderResults();}};
 $('start').onclick=()=>action('开始按键测试',async()=>{
-  await status();if(!peer.connected||!subscriptions.length)throw Error('连接或订阅已失效，请重新准备通道');
+  await status();
+  if(!peer.connected)throw Error('设备已断开，请唤醒后连接设备');
+  if(needsFreshLink||!subscriptions.length)await prepare();
+  if(!peer.connected||!subscriptions.length)throw Error('未能建立通知通道，请查看设备区的错误提示');
   const device=run.data.device?.address||peer.address;
   const previous=run.data.keys.flatMap(k=>k.attempts).find(a=>a.device&&a.device!==device);
   if(previous)throw Error('当前清单已有其他设备的采样，请先导出并新建测试');
@@ -217,7 +237,7 @@ $('clearKey').onclick=()=>{
 function download(content,extension,type) {
   const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`c3-test-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0006',exported:new Date().toISOString()},null,2),'json','application/json');
+$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0007',exported:new Date().toISOString()},null,2),'json','application/json');
 $('exportCsv').onclick=()=>{
   const rows=[['按键','键值'],...run.data.keys.map(k=>[k.name,keyValues(k)])];
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"').join(',')).join('\r\n');download('\ufeff'+csv,'csv','text/csv;charset=utf-8');
