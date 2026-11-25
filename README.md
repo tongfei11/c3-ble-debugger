@@ -1,18 +1,17 @@
 # C3 BLE Debugger
 
-浏览器 Web 调试台与 ESP32-C3 BLE 调试固件。浏览器通过 Web Serial 直接连接 C3，用于配对设备、逐项采样按键/开关/滚轮、查看去重键值并导出 CSV。另保留 Python 终端工具，用于扫描、GATT 服务检查、读写和原始通知记录。
+浏览器 Web 调试台与 ESP32-C3 BLE 调试固件。浏览器通过 Web Serial 直接连接 C3，用于配对设备、逐项采样按键/开关/滚轮、查看去重键值并导出 CSV。
 
 ## 目录
 
 - `firmware/` — ESP32-C3 BLE 调试固件，独立于日常遥控器接收固件。
 - `desktop/web/` — 浏览器直连串口的 Web 调试台，无需后台服务。
-- `desktop/ble_debugger.py` — 可选 Python 终端程序。
-- `tests/` — 串口分帧和命令响应回归测试。
+- `tests/` — Web 串口协议、采样和界面状态回归测试。
 - `VERSION` — 四位编译号。
 
-## Web 按键测试台（推荐）
+## Web 按键采样台
 
-使用桌面 Chrome 直接打开 `desktop/web/index.html`。无需 Python、Node 或本地服务，页面使用 Web Serial 直接访问 USB 串口。所有资源随仓库提供，不依赖 CDN。必须在具备 Web Serial 的安全上下文中打开；已在 Chrome 的本地 `file://` 页面验证能力可用。浏览器不支持时页面会提示。
+使用桌面 Chrome 直接打开 `desktop/web/index.html`。无需安装运行环境或启动本地服务，页面使用 Web Serial 直接访问 USB 串口。所有资源随仓库提供，不依赖 CDN。必须在具备 Web Serial 的安全上下文中打开；已在 Chrome 的本地 `file://` 页面验证能力可用。浏览器不支持时页面会提示。
 
 页面分为「01 连接设备」「02 测试」「03 结果导出」三个 Tab，按键数量与逐键采样同处测试页。切换只改变可见面板，不中断连接和正在进行的采样，结果与清单保留。
 
@@ -26,72 +25,15 @@
 
 只记录点击开始之后的通知。断线或固件丢包事件会中止当前采样并标记异常。刷新会关闭串口并将未结束的采样标为异常；结果保存在当前浏览器存储，不保证跨浏览器或移动文件路径后共享，请及时导出。本地存储满时会提示。单次采样上限 10000 条，串口追踪保留最近 20000 条，追踪截断状态记录在浏览器本地；按键样本另行保留。
 
-Web 与电脑端版本为 `0009`，板上调试固件仍为 `0002`，页面分别显示。Web 的配对、通道订阅与通知采样需在浏览器授权串口后做完整实机验收；不把模拟页面测试视为硬件验收。
+Web 版本为 `0010`，板上调试固件仍为 `0002`，页面分别显示。Web 已实测串口握手、已有绑定加密重连、服务枚举和 4 路通知订阅；新设备配对及不同开关、滚轮的完整采样仍需对应设备验收。
 
 ```sh
 node --test tests/test_web*.js
 ```
 
-## Python 终端（保留）
-
-需要 Python 3.9 或更高版本。
-
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -r desktop/requirements.txt
-.venv/bin/python desktop/ble_debugger.py --ports
-.venv/bin/python desktop/ble_debugger.py --port /dev/cu.usbmodemEXAMPLE
-```
-
-Windows 使用 `.venv\Scripts\python.exe`，端口例如 `COM3`。
-
-启动时通过 `hello` 确认固件身份。选错端口或运行日常接收器固件时会提示超时。请先退出占用同一串口的 vRemoter 或串口监视器。
-
-## 适配流程
-
-```text
-scan 5
-connect 1 secure
-discover
-read 0x0042
-subscribe 0x002b
-mark up
-mark down
-unsubscribe 0x002b
-disconnect
-quit
-```
-
-`connect 1` 使用最近一次扫描结果中的第一个设备及其地址类型。也可以直接指定 `connect AA:BB:CC:DD:EE:FF random secure`。`secure` 表示连接后协商加密与绑定，未添加时仅建立 GATT 连接，可随后用 `pair` 请求配对。目标设备需要进入可发现或配对状态。
-
-`discover` 后按实际发现的服务和特征选择句柄。上面的 `0x0042` 和 `0x002b` 仅为操作示例，其他设备的句柄可能完全不同。标准 BLE HID Report Map 特征的 UUID 为 `2A4B`，可读取其对应特征句柄，用于理解报告格式。
-
-用 `mark 按键名称` 给随后记录加标签，再按硬件按键。程序持续显示原始通知，包括十六进制载荷和句柄，便于对比按下、松开、长按和组合键。
-
-```text
-write 0x0012 0100
-write 0x0012 0100 no-response
-subscribe 0x0030 indicate
-bonds
-forget AA:BB:CC:DD:EE:FF
-status
-help
-```
-
-写命令应根据目标设备协议选择特征、载荷和写入方式。`no-response` 只能确认本地栈接受请求，实际行为需观察设备响应。超时后先查 `status`，避免自动重发写入。空回车不会重复上一条命令。
-
-## 记录与验证
-
-每次会话自动新建 `logs/capture-*.jsonl`，包含 UTC 时间、主机单调时间、当前标签、命令响应及异步通知。可用 `--log 新文件路径` 指定位置，已存在的文件不会被覆盖。日志可能包含设备地址和操作数据，请自行选择需要分享的记录。
-
-```sh
-python3 -m unittest discover -s tests
-python3 -m py_compile desktop/ble_debugger.py
-```
-
 ## 范围
 
-首版提供终端交互。支持 BLE GATT 单设备连接，经典蓝牙和厂家专有 2.4 GHz 协议需要对应硬件和协议适配。该工具输出原始数据，按键含义需要结合描述符和实测确定。
+通过 Web 界面操作。支持 BLE GATT 单设备连接，经典蓝牙和厂家专有 2.4 GHz 协议需要对应硬件和协议适配。该工具输出原始数据，按键含义需要结合描述符和实测确定。
 
 ## 调试固件编译与刷写
 
@@ -120,4 +62,4 @@ GATT 操作成功的 `data.status` 为 `0`。有响应写入、读操作及 CCCD
 
 首版扫描最多保留 128 个结果，GATT 枚举最多 256 个条目。写入最大 128 字节，并受当前 ATT MTU 限制。通知队列有界，溢出会产生 `dropped` 事件，记录该情况后应缩小订阅范围或降低事件速率。首版支持无输入输出的 Just Works 配对，需要输入 PIN 或数字确认的设备会明确报错。
 
-当前首版编译号为 `0002`。UART0 已实测握手、扫描、加密连接、服务枚举、HID 描述符读取及订阅配置。实际通知采样和任意特征写入仍需后续硬件验收，详见 `HANDOFF.md`。
+当前首版编译号为 `0002`。UART0 已实测握手、扫描、加密连接、服务枚举、HID 描述符读取及订阅配置。实际按键通知采样已验证，任意特征写入仍需后续硬件验收，详见 `HANDOFF.md`。

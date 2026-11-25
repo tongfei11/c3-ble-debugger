@@ -245,6 +245,6 @@ $('newRun').onclick=()=>{if(!window.confirm('清空当前本地测试记录？�
 window.addEventListener('beforeunload',e=>{if(run.active!==null){e.preventDefault();e.returnValue='';}});
 window.addEventListener('pagehide',()=>{run.stop('invalid','页面关闭或刷新中断采样');save();});
 if(!navigator.serial || !window.isSecureContext) {notice('当前浏览器或页面环境不支持 Web Serial。请使用桌面 Chrome 打开本地页面，或在 HTTPS 网站打开。',true);$('serialConnect').disabled=true;}
-else notice('浏览器支持串口直连。点击「选择 C3 串口」开始，无需运行 Python 程序。');
+else notice('浏览器支持串口直连。点击「选择 C3 串口」开始，无需启动后台服务。');
 if(run.data.keys.length)$('count').value=run.data.keys.length;
 render();if(!navigator.serial)$('serialConnect').disabled=true;
