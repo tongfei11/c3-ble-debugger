@@ -10,7 +10,7 @@ for (const key of run.data.keys) if (key.status === 'recording') {
 function notice(text,error=false) { $('notice').textContent = text; $('notice').classList.toggle('error',error); $('deviceStatus').textContent=text; $('deviceStatus').classList.toggle('error',error); }
 function save() {
   try { localStorage.setItem(storeKey,JSON.stringify(run.data)); $('saveState').textContent = '已保存到当前浏览器'; }
-  catch (_) { $('saveState').textContent = '本地保存失败，请及时导出 JSON'; }
+  catch (_) { $('saveState').textContent = '本地保存失败，请及时导出 CSV'; }
 }
 function trace(direction,message) {
   if (run.data.trace.length >= traceLimit) { run.data.trace.shift(); run.data.traceTruncated = true; }
@@ -237,7 +237,6 @@ $('clearKey').onclick=()=>{
 function download(content,extension,type) {
   const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`c3-test-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0007',exported:new Date().toISOString()},null,2),'json','application/json');
 $('exportCsv').onclick=()=>{
   const rows=[['按键','键值'],...run.data.keys.map(k=>[k.name,keyValues(k)])];
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"').join(',')).join('\r\n');download('\ufeff'+csv,'csv','text/csv;charset=utf-8');
