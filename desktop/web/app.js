@@ -16,7 +16,10 @@ function trace(direction,message) {
   if (run.data.trace.length >= traceLimit) { run.data.trace.shift(); run.data.traceTruncated = true; }
   run.data.trace.push({time:new Date().toISOString(),direction,message});
 }
-let eventRenderTimer, needsFreshLink = false;
+let eventRenderTimer, needsFreshLink = false, lastPort = null;
+let deviceNames = {};
+try { deviceNames = JSON.parse(localStorage.getItem('c3-device-names-v1')) || {}; } catch (_) {}
+function deviceName(d) { return deviceNames[d.address?.toLowerCase()] || d.name || d.address; }
 function event(message) {
   if (message.event === 'notification') {
     run.notify(message);
@@ -31,14 +34,16 @@ function event(message) {
 function invalidate(reason) { run.stop('invalid',reason); save(); render(); notice(reason,true); }
 function renderConnection() {
   $('connection').textContent = identity ? `C3 已连接 · 固件 ${identity.build}` : '串口未连接';
-  $('peer').textContent = peer.connected ? `${peer.address} · ${peer.secure?'已加密':'未加密'} · ${subscriptions.length} 路通知` : '蓝牙未连接';
+  $('peer').textContent = peer.connected ? `${deviceName(peer)} · ${peer.secure?'已加密':'未加密'} · ${subscriptions.length} 路通知` : '蓝牙未连接';
 }
 function controls() {
   const serial = !!identity, connected = !!peer.connected, active = run.active !== null, key = run.data.keys[selected];
-  for (const id of ['status','bonds','scan','disconnect','prepare','applyChannels','serialClose']) $(id).disabled = busy || !serial || active;
+  for (const id of ['scan','disconnect','prepare','applyChannels']) $(id).disabled = busy || !serial || active;
   $('scan').disabled ||= connected;
   for (const id of ['disconnect','prepare','applyChannels']) $(id).disabled ||= !connected;
-  $('serialConnect').disabled = busy || !!link;
+  $('serialConnect').disabled = busy || !!link || !navigator.serial;
+  $('serialReset').disabled = busy || active || !lastPort;
+  $('disconnect').hidden = !connected;
   $('setup').disabled = busy || active;
   $('count').disabled = busy || active;
   $('keyName').disabled = busy || active || !key;
@@ -95,12 +100,13 @@ async function status() {
   return peer;
 }
 function deviceList(devices, bonded) {
-  $('devices').replaceChildren();
-  if (!devices.length) { $('devices').textContent = bonded?'没有已配对设备，请扫描新设备。':'未扫描到设备，请确认目标已唤醒或进入配对模式。'; return; }
+  const target = $(bonded ? 'devices' : 'scanResults');
+  target.replaceChildren();
+  if (!devices.length) { target.textContent = bonded?'没有已配对设备，请扫描新设备。':'未扫描到设备，请确认目标已唤醒或进入配对模式。'; return; }
   for (const d of devices) {
     const row = document.createElement('div'); row.className='device-row';
     const info=document.createElement('div'), name=document.createElement('strong'), detail=document.createElement('small');
-    name.textContent=d.name||d.address;
+    name.textContent=deviceName(d);
     detail.textContent=`${d.address} · ${d.address_type||'地址类型待选'}${d.rssi!==undefined?` · ${d.rssi} dBm`:''}`;info.append(name,detail);
     const options=document.createElement('div');options.className='toolbar';
     let type;
@@ -110,9 +116,22 @@ function deviceList(devices, bonded) {
       channels=[];subscriptions=[];channelResults=[];renderChannels();
       peer=await link.request('connect',{address:d.address,address_type:d.address_type||type.value,secure:true});
       needsFreshLink=false;
-      run.data.device={...d,address_type:d.address_type||type.value};run.data.firmware=identity;
+      run.data.device={...d,name:deviceName(d),address_type:d.address_type||type.value};run.data.firmware=identity;
+      deviceList((await link.request('bonds')).bonds||[],true);
       await prepare();
-    });options.append(button);row.append(info,options);$('devices').append(row);
+    });
+    if (bonded) {
+      const rename=document.createElement('button');rename.textContent='重命名';rename.setAttribute('aria-label',`重命名 ${deviceName(d)}`);
+      rename.onclick=()=>{
+        const value=window.prompt('设备备注名称（留空恢复原名，仅保存在当前浏览器）',deviceNames[d.address.toLowerCase()]||'');
+        if(value===null)return;
+        const text=value.trim();if(text.length>80){notice('设备名称最多 80 个字符',true);return;}
+        const next={...deviceNames};if(text)next[d.address.toLowerCase()]=text;else delete next[d.address.toLowerCase()];
+        try{localStorage.setItem('c3-device-names-v1',JSON.stringify(next));deviceNames=next;deviceList(devices,true);renderConnection();notice('设备名称已保存，下次仍会显示。');}
+        catch(_){notice('设备名称保存失败，请检查浏览器存储空间。',true);}
+      };options.append(rename);
+    }
+    options.append(button);row.append(info,options);target.append(row);
   }controls();
 }
 function renderChannels() {
@@ -145,20 +164,30 @@ async function prepare() {
   channels=all.map(c=>({...c,selected:preferred.slice(0,4).some(p=>p.handle===c.handle)}));renderChannels();
   await applyChannels();await status();
 }
+async function openSerial(port, preserve = false) {
+  lastPort = port;
+  const previousPeer = peer, previousNeedsFreshLink = needsFreshLink;
+  link=new SerialLink(event,e=>{identity=null;peer={};subscriptions=[];invalidate(`串口断开：${e.message}`);const old=link;link=null;old?.close();},trace);
+  try {
+    identity=await link.open(port);run.data.firmware=identity;await status();
+    const sameLink=preserve && previousPeer.connected && peer.connected && previousPeer.address===peer.address;
+    needsFreshLink=sameLink?previousNeedsFreshLink:!!peer.connected;
+    if(!sameLink){subscriptions=[];channels=[];channelResults=[];renderChannels();}
+    deviceList((await link.request('bonds')).bonds||[],true);
+  } catch(e) {await link?.close();link=null;identity=null;peer={};subscriptions=[];throw e;}
+  $('identity').textContent=`已验证 ${identity.name} · 固件 ${identity.build} · 协议 ${identity.protocol} · 115200 baud。${needsFreshLink?'检测到旧蓝牙连接：请先断开蓝牙再连接设备。':''}`;
+}
 $('serialConnect').onclick = async()=>{
-  if (!navigator.serial) return;
+  if (!navigator.serial || busy || link) return;
   let port; try {port=await navigator.serial.requestPort();} catch(e) {notice('未选择串口，可再次点击连接。');return;}
-  action('连接 C3 串口',async()=>{
-    link=new SerialLink(event,e=>{identity=null;peer={};subscriptions=[];invalidate(`串口断开：${e.message}`);const old=link;link=null;old?.close();},trace);
-    try { identity=await link.open(port);run.data.firmware=identity;await status();needsFreshLink=!!peer.connected;deviceList((await link.request('bonds')).bonds||[],true); }
-    catch(e) {await link?.close();link=null;identity=null;throw e;}
-    $('identity').textContent=`已验证 ${identity.name} · 固件 ${identity.build} · 协议 ${identity.protocol} · 115200 baud。${needsFreshLink?'检测到旧蓝牙连接：请先断开蓝牙再连接设备。':''}`;
-  });
+  action('连接 C3 串口',()=>openSerial(port));
 };
-$('serialClose').onclick=()=>action('关闭串口',async()=>{await link.close();link=null;identity=null;peer={};subscriptions=[];});
-$('status').onclick=()=>action('查询状态',status);
-$('bonds').onclick=()=>action('读取已配对设备',async()=>deviceList((await link.request('bonds')).bonds||[],true));
-$('scan').onclick=()=>action('扫描设备（5 秒）',async()=>{const r=await link.request('scan',{seconds:5});deviceList(r.devices||[],false);if(r.truncated)$('devices').prepend(document.createTextNode('扫描结果达到固件上限，部分设备未列出。'));});
+$('serialReset').onclick=()=>action('重置串口',async()=>{
+  const port=lastPort;if(!port)throw Error('请先选择 C3 串口');
+  if(link)await link.close();link=null;identity=null;
+  await openSerial(port,true);
+});
+$('scan').onclick=()=>action('扫描设备（5 秒）',async()=>{const r=await link.request('scan',{seconds:5});deviceList(r.devices||[],false);if(r.truncated)$('scanResults').prepend(document.createTextNode('扫描结果达到固件上限，部分设备未列出。'));});
 $('disconnect').onclick=()=>action('断开蓝牙',async()=>{await link.request('disconnect');peer={};subscriptions=[];channels=[];renderChannels();});
 $('prepare').onclick=()=>action('准备通知通道',prepare);
 $('applyChannels').onclick=()=>action('应用通知通道',applyChannels);
@@ -180,7 +209,7 @@ $('skip').onclick=()=>{run.skip(selected);if(selected<run.data.keys.length-1)sel
 function download(content,extension,type) {
   const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`c3-test-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0003',exported:new Date().toISOString()},null,2),'json','application/json');
+$('exportJson').onclick=()=>download(JSON.stringify({...run.data,webBuild:'0004',exported:new Date().toISOString()},null,2),'json','application/json');
 $('exportCsv').onclick=()=>{
   const rows=[['序号','按键','状态','尝试次数','最后报文数','HEX','备注'],...run.data.keys.map((k,i)=>{const a=k.attempts.at(-1);return[i+1,k.name,labels[k.status],k.attempts.length,a?.notifications.length||0,[...new Set((a?.notifications||[]).map(n=>n.hex))].join(' '),a?.reason||''];})];
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"').join(',')).join('\r\n');download('\ufeff'+csv,'csv','text/csv;charset=utf-8');
